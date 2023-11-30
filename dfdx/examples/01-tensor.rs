@@ -6,15 +6,13 @@ use dfdx::{
     tensor_ops::RealizeTo,
 };
 
-#[cfg(not(feature = "cuda"))]
-type Device = dfdx::tensor::Cpu;
-
-#[cfg(feature = "cuda")]
 type Device = dfdx::tensor::Cuda;
 
 fn main() {
     // a device is required to create & modify tensors.
     let dev: Device = Device::default();
+
+    println!("device={:?}", dev);
 
     // easily create tensors using the `TensorFromArray::tensor` method of devices
     // tensors are generic over the:

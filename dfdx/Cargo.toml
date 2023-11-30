@@ -31,7 +31,7 @@ indicatif = "0.17.3"
 rand = { workspace = true }
 
 [dependencies]
-dfdx-core = { path = "../dfdx-core" }
+dfdx-core = { path = "../dfdx-core"}
 dfdx-derives = { path = "../dfdx-derives" }
 safetensors = { workspace = true, optional = true }
 num-traits = { workspace = true }

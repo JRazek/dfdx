@@ -41,6 +41,7 @@ mod relu;
 mod reshape;
 mod residual_add;
 mod residual_mul;
+mod rnn;
 mod sigmoid;
 mod sin;
 mod softmax;
