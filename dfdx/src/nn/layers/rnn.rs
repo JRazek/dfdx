@@ -5,11 +5,12 @@ pub struct LSTMState<H: ConstDim, Dt: Dtype, Dev: Device<Dt>> {
     pub hidden: Tensor<(H,), Dt, Dev>,
 }
 
+#[derive(Debug, Clone)]
 pub struct LSTM<InDim: ConstDim, OutDim: ConstDim, Dt: Dtype, Dev: Device<Dt>> {
-    forget_linear: Linear<InDim, OutDim, Dt, Dev>,
-    update_linear: Linear<InDim, OutDim, Dt, Dev>,
-    output_linear: Linear<InDim, OutDim, Dt, Dev>,
-    candidate_linear: Linear<InDim, OutDim, Dt, Dev>,
+    pub forget_linear: Linear<InDim, OutDim, Dt, Dev>,
+    pub update_linear: Linear<InDim, OutDim, Dt, Dev>,
+    pub output_linear: Linear<InDim, OutDim, Dt, Dev>,
+    pub candidate_linear: Linear<InDim, OutDim, Dt, Dev>,
 }
 
 impl<InputDim: ConstDim, HiddenDim: ConstDim, Dt: Dtype, Dev: Device<Dt>>
@@ -59,6 +60,35 @@ where
         let state = LSTMState { cell, hidden };
 
         Ok((state, activation))
+    }
+}
+
+use std::marker::PhantomData;
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct LSTMConfig<I: ConstDim, O: ConstDim> {
+    inp: PhantomData<I>,
+    out: PhantomData<O>,
+}
+
+impl<const IN_DIM: usize, const OUT_DIM: usize, Dt: Dtype, Dev: Device<Dt>> BuildOnDevice<Dt, Dev>
+    for LSTMConfig<Const<IN_DIM>, Const<OUT_DIM>>
+{
+    type Built = LSTM<Const<IN_DIM>, Const<OUT_DIM>, Dt, Dev>;
+
+    fn try_build_on_device(&self, device: &Dev) -> Result<Self::Built, dfdx_core::tensor::Error> {
+        let linear_config = LinearConstConfig::<IN_DIM, OUT_DIM>::default();
+
+        let zero_tensor = linear_config.try_build_on_device(device)?;
+
+        let lstm = LSTM {
+            forget_linear: zero_tensor.clone(),
+            update_linear: zero_tensor.clone(),
+            output_linear: zero_tensor.clone(),
+            candidate_linear: zero_tensor.clone(),
+        };
+
+        Ok(lstm)
     }
 }
 
