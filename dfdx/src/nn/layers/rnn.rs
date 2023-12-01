@@ -1,71 +1,95 @@
 use crate::prelude::*;
-use dfdx_core::tensor_ops::matmul;
-use dfdx_core::tensor_ops::TryConv1D;
-
-fn apply_gate<const N: usize, Dt: Dtype, Dev: Device<Dt>>(
-    vec: Tensor<Rank1<N>, Dt, Dev>,
-    gate: Tensor<Rank1<N>, Dt, Dev>,
-) -> Result<Tensor<Rank1<N>, Dt, Dev>, Error> {
-    vec.try_mul(gate)
-}
-
-type Vector<D, Dt, Dev> = Tensor<(D,), Dt, Dev>;
 
 pub struct LSTMState<H: ConstDim, Dt: Dtype, Dev: Device<Dt>> {
-    pub cell: Vector<H, Dt, Dev>,
-    pub hidden: Vector<H, Dt, Dev>,
+    pub cell: Tensor<(H,), Dt, Dev>,
+    pub hidden: Tensor<(H,), Dt, Dev>,
 }
 
-pub struct LSTM<InDim: ConstDim, OutDim: Dim, Dt: Dtype, Dev: Device<Dt>> {
-    forget_linear: Linear<OutDim, InDim, Dt, Dev>,
-    update_linear: Linear<OutDim, InDim, Dt, Dev>,
-    output_linear: Linear<OutDim, InDim, Dt, Dev>,
-    candidate_linear: Linear<OutDim, InDim, Dt, Dev>,
+pub struct LSTM<InDim: ConstDim, OutDim: ConstDim, Dt: Dtype, Dev: Device<Dt>> {
+    forget_linear: Linear<InDim, OutDim, Dt, Dev>,
+    update_linear: Linear<InDim, OutDim, Dt, Dev>,
+    output_linear: Linear<InDim, OutDim, Dt, Dev>,
+    candidate_linear: Linear<InDim, OutDim, Dt, Dev>,
 }
-
-use typenum::Sum;
 
 impl<InputDim: ConstDim, HiddenDim: ConstDim, Dt: Dtype, Dev: Device<Dt>>
-    Module<(LSTMState<HiddenDim, Dt, Dev>, Vector<InputDim, Dt, Dev>)>
-    for LSTM<InputDim, HiddenDim, Dt, Dev>
+    Module<(LSTMState<HiddenDim, Dt, Dev>, Tensor<(InputDim,), Dt, Dev>)>
+    for LSTM<Const<{ InputDim::SIZE + HiddenDim::SIZE }>, HiddenDim, Dt, Dev>
+where
+    ((HiddenDim,), (InputDim,)): TryConcatAlong<Axis<0>>,
+    <((HiddenDim,), (InputDim,)) as TryConcatAlong<Axis<0>>>::Output: Shape,
+    Linear<Const<{ InputDim::SIZE + HiddenDim::SIZE }>, HiddenDim, Dt, Dev>: Module<
+        Tensor<<((HiddenDim,), (InputDim,)) as TryConcatAlong<Axis<0>>>::Output, Dt, Dev>,
+        Output = Tensor<(HiddenDim,), Dt, Dev>,
+    >,
 {
-    type Output = (LSTMState<HiddenDim, Dt, Dev>, Vector<InputDim, Dt, Dev>);
+    type Output = (LSTMState<HiddenDim, Dt, Dev>, Tensor<(HiddenDim,), Dt, Dev>);
 
     fn try_forward(
         &self,
         (LSTMState { cell, hidden }, input): (
             LSTMState<HiddenDim, Dt, Dev>,
-            Vector<InputDim, Dt, Dev>,
+            Tensor<(InputDim,), Dt, Dev>,
         ),
     ) -> Result<Self::Output, Error> {
+        let concat = (hidden, input).concat_along(Axis::<0>);
+
         let forget_gate = self
             .forget_linear
-            .try_forward(hidden.clone())?
+            .try_forward(concat.clone())?
+            .try_sigmoid()?;
+        let update_gate = self
+            .update_linear
+            .try_forward(concat.clone())?
+            .try_sigmoid()?;
+        let output_gate = self
+            .output_linear
+            .try_forward(concat.clone())?
             .try_sigmoid()?;
 
-        //        let update_gate = self
-        //            .update_linear
-        //            .try_forward(hidden.clone())?
-        //            .try_sigmoid()?;
-        //        let output_gate = self.output_linear.try_forward(hidden)?.try_sigmoid()?;
-        //
-        //        let candidate_cell = self.candidate_linear.try_forward(input)?.try_tanh()?;
+        let candidate_cell = self.candidate_linear.try_forward(concat)?.try_tanh()?;
 
-        todo!()
+        let cell = candidate_cell
+            .try_mul(update_gate)?
+            .try_add(cell.try_mul(forget_gate)?)?;
+
+        let hidden = output_gate.try_mul(cell.clone().try_tanh()?)?;
+
+        let activation = hidden.clone().try_sigmoid()?;
+        let state = LSTMState { cell, hidden };
+
+        Ok((state, activation))
     }
+}
 
-    //    fn forward(&self, input: Self::Input, _: ()) -> Result<Self::Output, Error> {
-    //        let LSTMState { cell, hidden } = input;
-    //        let forget_gate = self.forget_linear.forward(hidden.clone(), ())?;
-    //        let update_gate = self.update_linear.forward(hidden, ())?;
-    //        let output_gate = self.output_linear.forward(hidden, ())?;
-    //        let forget_gate = forget_gate.sigmoid()?;
-    //        let update_gate = update_gate.sigmoid()?;
-    //        let output_gate = output_gate.tanh()?;
-    //        let cell = apply_gate(cell, forget_gate)?;
-    //        let cell = apply_gate(cell, update_gate)?;
-    //        let hidden = cell.clone().tanh()?;
-    //        let hidden = apply_gate(hidden, output_gate)?;
-    //        Ok(LSTMState { cell, hidden })
-    //    }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lstm() {
+        let dev = AutoDevice::default();
+
+        let linear_config = LinearConstConfig::<4, 2>::default();
+
+        let zero_tensor: Linear<_, _, f64, _> = linear_config.try_build_on_device(&dev).unwrap();
+
+        let lstm = LSTM {
+            forget_linear: zero_tensor.clone(),
+            update_linear: zero_tensor.clone(),
+            output_linear: zero_tensor.clone(),
+            candidate_linear: zero_tensor.clone(),
+        };
+
+        let state = LSTMState {
+            cell: dev.try_tensor(&[0.0, 0.0]).unwrap(),
+            hidden: dev.try_tensor(&[0.0, 0.0]).unwrap(),
+        };
+
+        let input = dev.try_tensor(&[0.0, 0.0]).unwrap();
+
+        let (state, input) = lstm.try_forward((state, input)).unwrap();
+
+        println!("{:?}", input);
+    }
 }
