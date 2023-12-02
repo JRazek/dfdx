@@ -1,8 +1,8 @@
 use crate::prelude::*;
 
-pub struct LSTMState<H: ConstDim, Dt: Dtype, Dev: Device<Dt>> {
-    pub cell: Tensor<(H,), Dt, Dev>,
-    pub hidden: Tensor<(H,), Dt, Dev>,
+pub struct LSTMState<H: ConstDim, Dt: Dtype, Dev: Device<Dt>, T: Tape<Dt, Dev>> {
+    pub cell: Tensor<(H,), Dt, Dev, T>,
+    pub hidden: Tensor<(H,), Dt, Dev, T>,
 }
 
 #[derive(Debug, Clone)]
@@ -13,53 +13,57 @@ pub struct LSTM<InDim: ConstDim, OutDim: ConstDim, Dt: Dtype, Dev: Device<Dt>> {
     pub candidate_linear: Linear<InDim, OutDim, Dt, Dev>,
 }
 
-impl<InputDim: ConstDim, HiddenDim: ConstDim, Dt: Dtype, Dev: Device<Dt>>
-    Module<(LSTMState<HiddenDim, Dt, Dev>, Tensor<(InputDim,), Dt, Dev>)>
-    for LSTM<Const<{ InputDim::SIZE + HiddenDim::SIZE }>, HiddenDim, Dt, Dev>
+impl<InputDim: ConstDim, HiddenDim: ConstDim, Dt: Dtype, Dev: Device<Dt>, T: Tape<Dt, Dev>>
+    Module<(
+        LSTMState<HiddenDim, Dt, Dev, T>,
+        Tensor<(InputDim,), Dt, Dev, T>,
+    )> for LSTM<Const<{ InputDim::SIZE + HiddenDim::SIZE }>, HiddenDim, Dt, Dev>
 where
     ((HiddenDim,), (InputDim,)): TryConcatAlong<Axis<0>>,
     <((HiddenDim,), (InputDim,)) as TryConcatAlong<Axis<0>>>::Output: Shape,
     Linear<Const<{ InputDim::SIZE + HiddenDim::SIZE }>, HiddenDim, Dt, Dev>: Module<
         Tensor<<((HiddenDim,), (InputDim,)) as TryConcatAlong<Axis<0>>>::Output, Dt, Dev>,
-        Output = Tensor<(HiddenDim,), Dt, Dev>,
+        Output = Tensor<(HiddenDim,), Dt, Dev, T>,
     >,
 {
-    type Output = (LSTMState<HiddenDim, Dt, Dev>, Tensor<(HiddenDim,), Dt, Dev>);
+    type Output = LSTMState<HiddenDim, Dt, Dev, T>;
 
     fn try_forward(
         &self,
         (LSTMState { cell, hidden }, input): (
-            LSTMState<HiddenDim, Dt, Dev>,
-            Tensor<(InputDim,), Dt, Dev>,
+            LSTMState<HiddenDim, Dt, Dev, T>,
+            Tensor<(InputDim,), Dt, Dev, T>,
         ),
     ) -> Result<Self::Output, Error> {
         let concat = (hidden, input).concat_along(Axis::<0>);
 
         let forget_gate = self
             .forget_linear
-            .try_forward(concat.clone())?
+            .try_forward(concat.retaped())?
             .try_sigmoid()?;
         let update_gate = self
             .update_linear
-            .try_forward(concat.clone())?
+            .try_forward(concat.retaped())?
             .try_sigmoid()?;
         let output_gate = self
             .output_linear
-            .try_forward(concat.clone())?
+            .try_forward(concat.retaped())?
             .try_sigmoid()?;
 
-        let candidate_cell = self.candidate_linear.try_forward(concat)?.try_tanh()?;
+        let candidate_cell = self
+            .candidate_linear
+            .try_forward(concat.retaped())?
+            .try_tanh()?;
 
         let cell = candidate_cell
             .try_mul(update_gate)?
             .try_add(cell.try_mul(forget_gate)?)?;
 
-        let hidden = output_gate.try_mul(cell.clone().try_tanh()?)?;
+        let hidden = output_gate.try_mul(cell.retaped::<T>())?;
 
-        let activation = hidden.clone().try_sigmoid()?;
         let state = LSTMState { cell, hidden };
 
-        Ok((state, activation))
+        Ok(state)
     }
 }
 
@@ -118,8 +122,8 @@ mod tests {
 
         let input = dev.try_tensor(&[0.0, 0.0]).unwrap();
 
-        let (state, input) = lstm.try_forward((state, input)).unwrap();
+        let LSTMState { cell, hidden } = lstm.try_forward((state, input)).unwrap();
 
-        println!("{:?}", input);
+        println!("cell: {:?}, hidden: {:?}", cell, hidden);
     }
 }
