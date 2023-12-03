@@ -13,15 +13,22 @@ pub struct LSTM<InDim: ConstDim, OutDim: ConstDim, Dt: Dtype, Dev: Device<Dt>> {
     pub candidate_linear: Linear<InDim, OutDim, Dt, Dev>,
 }
 
-impl<InputDim: ConstDim, HiddenDim: ConstDim, Dt: Dtype, Dev: Device<Dt>, T: Tape<Dt, Dev>>
+impl<
+        InputDim: ConstDim,
+        HiddenDim: ConstDim,
+        AddedDims: ConstDim,
+        Dt: Dtype,
+        Dev: Device<Dt>,
+        T: Tape<Dt, Dev>,
+    >
     Module<(
         LSTMState<HiddenDim, Dt, Dev, T>,
         Tensor<(InputDim,), Dt, Dev, T>,
-    )> for LSTM<Const<{ InputDim::SIZE + HiddenDim::SIZE }>, HiddenDim, Dt, Dev>
+    )> for LSTM<AddedDims, HiddenDim, Dt, Dev>
 where
     ((HiddenDim,), (InputDim,)): TryConcatAlong<Axis<0>>,
     <((HiddenDim,), (InputDim,)) as TryConcatAlong<Axis<0>>>::Output: Shape,
-    Linear<Const<{ InputDim::SIZE + HiddenDim::SIZE }>, HiddenDim, Dt, Dev>: Module<
+    Linear<AddedDims, HiddenDim, Dt, Dev>: Module<
         Tensor<<((HiddenDim,), (InputDim,)) as TryConcatAlong<Axis<0>>>::Output, Dt, Dev>,
         Output = Tensor<(HiddenDim,), Dt, Dev, T>,
     >,
@@ -41,6 +48,7 @@ where
             .forget_linear
             .try_forward(concat.retaped())?
             .try_sigmoid()?;
+
         let update_gate = self
             .update_linear
             .try_forward(concat.retaped())?
@@ -104,9 +112,8 @@ mod tests {
     fn test_lstm() {
         let dev = AutoDevice::default();
 
-        let linear_config = LinearConstConfig::<4, 2>::default();
-
-        let zero_tensor: Linear<_, _, f64, _> = linear_config.try_build_on_device(&dev).unwrap();
+        let linear_config = LinearConstConfig::default();
+        let zero_tensor: Linear<_, _, f32, _> = linear_config.try_build_on_device(&dev).unwrap();
 
         let lstm = LSTM {
             forget_linear: zero_tensor.clone(),
@@ -116,11 +123,11 @@ mod tests {
         };
 
         let state = LSTMState {
-            cell: dev.try_tensor(&[0.0, 0.0]).unwrap(),
-            hidden: dev.try_tensor(&[0.0, 0.0]).unwrap(),
+            cell: dev.try_tensor(&[0f32; 4]).unwrap(),
+            hidden: dev.try_tensor(&[0f32; 4]).unwrap(),
         };
 
-        let input = dev.try_tensor(&[0.0, 0.0]).unwrap();
+        let input = dev.try_tensor(&[0f32; 2]).unwrap();
 
         let LSTMState { cell, hidden } = lstm.try_forward((state, input)).unwrap();
 
